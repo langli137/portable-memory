@@ -94,7 +94,9 @@
   <div>
     <div class="stats" id="stats"></div>
     <div class="panel">
-      <h2>记忆库 <span id="memCount" style="color:var(--ink2)"></span></h2>
+      <h2>记忆库 <span id="memCount" style="color:var(--ink2)"></span>
+        <span id="currentProjectBadge" style="float:right;font-size:12px;color:var(--accent);font-weight:400">当前：-</span>
+      </h2>
       <div class="toolbar">
         <input type="text" id="searchInput" placeholder="搜索记忆（Ctrl+Enter 提交）"
                onkeydown="if(event.ctrlKey&&event.key==='Enter')doSearch()">
@@ -197,16 +199,23 @@ async function loadStats() {
 async function loadProjects() {
   const d = await api('/projects');
   const el = document.getElementById('projectList');
-  if (!currentNs && d.items.length) currentNs = d.items[0].namespace;
+  if (!currentNs) currentNs = d.active_namespace || (d.items.length ? d.items[0].namespace : null);
+  const current = d.items.find(p => p.namespace === currentNs);
+  document.getElementById('currentProjectBadge').textContent =
+    '当前：' + (current ? current.name : (currentNs || '无'));
   el.innerHTML = d.items.map(p => `
     <div class="proj-item ${p.namespace===currentNs?'active':''}"
          onclick="switchProject('${esc(p.namespace)}')">
-      ${esc(p.name)} <small>${esc(p.namespace)}</small>
+      ${esc(p.name)} <small>${esc(p.namespace)}${p.namespace===currentNs?' · 当前':''}</small>
     </div>`).join('') || '<div class="empty" style="padding:10px">暂无项目</div>';
 }
 
 async function switchProject(ns) {
   currentNs = ns; searching = false;
+  if (ns) {
+    await api('/projects/register', {method:'POST',
+      body: JSON.stringify({namespace: ns})});
+  }
   document.getElementById('searchInput').value = '';
   await Promise.all([loadProjects(), loadMemories(), loadSessions()]);
 }

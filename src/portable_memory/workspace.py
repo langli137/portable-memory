@@ -138,6 +138,13 @@ class Workspace:
         ).fetchall()
         return [Project(**dict(r)) for r in rows]
 
+    def get_last_active(self) -> Project | None:
+        """The most recently used project — used as the UI's default view."""
+        row = self.conn.execute(
+            "SELECT * FROM projects ORDER BY last_active DESC LIMIT 1"
+        ).fetchone()
+        return Project(**dict(row)) if row else None
+
     def touch_project(self, namespace: str) -> None:
         self.conn.execute(
             "UPDATE projects SET last_active = ? WHERE namespace = ?",

@@ -104,7 +104,12 @@ class MemoryService:
     # ---- workspace: projects + sessions ----
     def projects(self) -> dict:
         items = [p.to_dict() for p in self.workspace.projects()]
-        return {"count": len(items), "items": items}
+        active = self.workspace.get_last_active()
+        return {
+            "count": len(items),
+            "items": items,
+            "active_namespace": active.namespace if active else None,
+        }
 
     def register_project(self, payload: dict) -> dict:
         ns = payload.get("namespace")
