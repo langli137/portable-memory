@@ -44,6 +44,7 @@ class Scored:
     bm25: float
     recency: float
     frequency: float
+    matched_terms: list[str]
 
     def to_dict(self) -> dict:
         d = self.memory.to_dict()
@@ -52,6 +53,7 @@ class Scored:
             bm25=round(self.bm25, 4),
             recency=round(self.recency, 4),
             frequency=round(self.frequency, 4),
+            matched_terms=self.matched_terms,
         )
         return d
 
@@ -114,6 +116,24 @@ class Retriever:
             self.store.touch(s.memory.id)
         return top
 
+    @staticmethod
+    def _matched_terms(m: Memory, query: str) -> list[str]:
+        """Query tokens actually present in the memory, in query order, de-duplicated.
+
+        Used by the UI to explain *why* a memory surfaced. Purely derived from
+        the same tokenizer as BM25 — no extra index, no fabricated data.
+        """
+        if not query.strip():
+            return []
+        doc_tokens = set(tokenize(m.content + " " + " ".join(m.tags)))
+        seen: set[str] = set()
+        matched: list[str] = []
+        for t in tokenize(query):
+            if t in doc_tokens and t not in seen:
+                seen.add(t)
+                matched.append(t)
+        return matched
+
     def _score(self, m: Memory, bm25: float, query: str) -> Scored:
         age_days = max(0.0, (time.time() - m.created_at) / 86400.0)
         half = max(self.config.decay_half_life_days, 0.1)
@@ -121,7 +141,14 @@ class Retriever:
         frequency = math.log1p(max(m.access_count, 0))
         # Keep lexical signal dominant; recency/frequency are tie-breakers.
         score = bm25 * 1.0 + recency * 0.15 + frequency * 0.05 + m.importance * 0.1
-        return Scored(memory=m, score=score, bm25=bm25, recency=recency, frequency=frequency)
+        return Scored(
+            memory=m,
+            score=score,
+            bm25=bm25,
+            recency=recency,
+            frequency=frequency,
+            matched_terms=self._matched_terms(m, query),
+        )
 
 
 def capture(

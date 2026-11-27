@@ -21,7 +21,7 @@ decay. All data stays on the user's machine.
 - "哪个项目 / 切换项目" — list or switch project namespaces.
 - "这个会话 / 开始会话 / 结束会话" — manage session lifecycle.
 - "配置记忆 / 接入编辑器" — register the MCP server into editors.
-- "打开面板 / 可视化" — open `http://127.0.0.1:8765/ui`.
+- "打开面板 / 可视化" — 简洁版 `http://127.0.0.1:8765/ui`，Vue 工作台版 `http://127.0.0.1:8765/ui/app` (recall playground with score breakdown, project/session linkage).
 
 ## Project isolation
 

@@ -227,16 +227,28 @@ class Handler(BaseHTTPRequestHandler):
         try:
             # Web UI (static assets) — served before auth so the page can load
             # and then call the API with a token entered by the user.
-            if path in ("/ui", "/ui/"):
-                self._send_file(
-                    Path(__file__).parent.parent / "webui" / "index.html",
-                    "text/html; charset=utf-8",
-                )
+            # Two versions:
+            #   /ui        -> zero-dependency single-file HTML
+            #   /ui/app    -> built Vue 3 workbench (src/webui/dist)
+            webui = Path(__file__).parent.parent / "webui"
+            if path == "/ui":
+                self._send_file(webui / "index.html", "text/html; charset=utf-8")
                 return
+            if path == "/ui/app":
+                self._send_file(webui / "dist" / "index.html", "text/html; charset=utf-8")
+                return
+
+            # Static assets. Resolve the path and verify it stays under the
+            # intended root before reading — blocks ../ traversal attempts.
             if path.startswith("/ui/"):
-                rel = path[len("/ui/"):]
-                asset = Path(__file__).parent.parent / "webui" / rel
-                if asset.is_file() and asset.parent == (Path(__file__).parent.parent / "webui"):
+                if path.startswith("/ui/app/"):
+                    root = webui / "dist"
+                    rel = path[len("/ui/app/"):]
+                else:
+                    root = webui
+                    rel = path[len("/ui/"):]
+                asset = (root / rel).resolve()
+                if asset.is_file() and asset.is_relative_to(root.resolve()):
                     ctype = "text/css; charset=utf-8" if rel.endswith(".css") else \
                             "application/javascript; charset=utf-8" if rel.endswith(".js") else \
                             "application/octet-stream"

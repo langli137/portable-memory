@@ -60,6 +60,15 @@ class TestGates(unittest.TestCase):
         self.assertIn("分页", results[0].memory.content)
         self.assertGreater(results[0].bm25, results[1].bm25)
 
+    def test_recall_reports_matched_terms(self):
+        self.store.add("分页默认 10 条，不开特例", tags=["分页"])
+        r = Retriever(self.store, self.config)
+        results = r.recall("分页 默认", limit=1)
+        payload = results[0].to_dict()
+        self.assertIn("matched_terms", payload)
+        self.assertTrue(payload["matched_terms"])
+        self.assertIn("分页", payload["matched_terms"])
+
     def test_soft_delete(self):
         m, _ = self.store.add("to be removed")
         self.assertTrue(self.store.delete(m.id))
