@@ -98,6 +98,21 @@ python scripts/setup_editors.py --all --repo-root /path/to/project
 支持：Claude Code、Cursor、Windsurf、WorkBuddy、DeepSeek Harness、GitHub Copilot。
 脚本把 MCP 服务注册到各自的配置文件，指向 `python -m portable_memory mcp`。
 
+## DeepSeek Harness 集成
+
+portable-memory 是一个 **MCP server**，可被 DeepSeek Harness（dsh）直接调用，为其提供跨会话长期记忆：
+
+```bash
+python scripts/setup_editors.py --editors dsh --dry-run
+python scripts/setup_editors.py --editors dsh
+```
+
+脚本在 `~/.dsh/config.json` 注册名为 `portable-memory` 的 MCP server（`python -m portable_memory mcp`）。
+dsh 会话中即可通过 `memory_add` / `memory_recall` / `session_start` / `session_end` 工具读写记忆。
+
+本项目**不是** dsh 核心的一部分，也不修改 dsh 源码；它是一个独立的 MCP 服务，遵循 dsh 的插件可发现约定。
+dsh 处于 Developer Preview，配置格式可能随版本变化——接入前请用你锁定的 dsh 版本验证一次路径。
+
 ## REST API
 
 服务默认监听 `127.0.0.1:8765`，设置 `PMEM_TOKEN` 后需 `Authorization: Bearer <token>`。
