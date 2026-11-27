@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 from typing import Any
 
 from .config import Config
 from .db import Store
 from .pipeline import Retriever, capture
+from .workspace import Workspace
 
 TOOLS = [
     {
@@ -64,6 +66,34 @@ TOOLS = [
             "required": ["id"],
         },
     },
+    {
+        "name": "session_start",
+        "description": "Start a new collaboration session for the current project.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "namespace": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "session_end",
+        "description": "Close a session with an optional summary.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "integer"},
+                "summary": {"type": "string"},
+            },
+            "required": ["id"],
+        },
+    },
+    {
+        "name": "project_list",
+        "description": "List all projects with their namespaces.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
 ]
 
 
@@ -71,34 +101,61 @@ class MCPBridge:
     def __init__(self, config: Config):
         self.store = Store(config.db_path)
         self.retriever = Retriever(self.store, config)
+        self.workspace = Workspace(self.store.conn)
+
+    def _namespace(self, args: dict) -> str:
+        ns = args.get("namespace")
+        if ns:
+            return str(ns)
+        detected = self.workspace.detect_project(Path.cwd())
+        return detected[0] if detected else "default"
 
     def dispatch(self, name: str, args: dict) -> dict:
         if name == "memory_add":
+            ns = self._namespace(args)
+            self.workspace.register_project(ns)
             mem, status = capture(
                 self.store,
                 args["content"],
                 memory_type=args.get("type", "fact"),
-                namespace=args.get("namespace", "default"),
+                namespace=ns,
                 tags=args.get("tags", []),
                 importance=float(args.get("importance", 1.0)),
                 source="mcp",
             )
-            return {"status": status, "memory": mem.to_dict() if mem else None}
+            return {"status": status, "namespace": ns,
+                    "memory": mem.to_dict() if mem else None}
         if name == "memory_recall":
             from .server import _parse_date
+            ns = self._namespace(args)
             items = self.retriever.recall(
                 args.get("query", ""),
-                namespace=args.get("namespace"),
+                namespace=ns,
                 limit=int(args.get("limit", 8)),
                 since=_parse_date(args.get("since")),
                 until=_parse_date(args.get("until")),
             )
-            return {"count": len(items), "items": [s.to_dict() for s in items]}
+            return {"namespace": ns, "count": len(items),
+                    "items": [s.to_dict() for s in items]}
         if name == "memory_list":
-            mems = self.store.all(args.get("namespace"))
-            return {"count": len(mems), "items": [m.to_dict() for m in mems]}
+            ns = self._namespace(args)
+            mems = self.store.all(ns)
+            return {"namespace": ns, "count": len(mems),
+                    "items": [m.to_dict() for m in mems]}
         if name == "memory_delete":
             return {"deleted": self.store.delete(int(args["id"]))}
+        if name == "session_start":
+            ns = self._namespace(args)
+            s = self.workspace.session_open(ns, args.get("title", ""), "mcp")
+            return {"session": s.to_dict()}
+        if name == "session_end":
+            s = self.workspace.session_close(
+                int(args["id"]), args.get("summary", "")
+            )
+            return {"session": s.to_dict() if s else None}
+        if name == "project_list":
+            items = [p.to_dict() for p in self.workspace.projects()]
+            return {"count": len(items), "items": items}
         raise ValueError(f"unknown tool: {name}")
 
     def handle(self, msg: dict) -> dict | None:

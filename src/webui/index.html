@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>portable-memory 面板</title>
+<style>
+  :root {
+    --bg: #faf8f3; --card: #fffdfa; --shell: #e8e4d9;
+    --line: #e6e3da; --line2: #d5d0c2; --ink: #2b2620; --ink2: #7d7566;
+    --accent: #2563eb; --accent-soft: #e6f1fb;
+    --red: #c0392b; --green: #3b6d11;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+         background: var(--bg); color: var(--ink); font-size: 14px; line-height: 1.6; }
+  header { background: var(--shell); border-bottom: 1px solid var(--line2);
+           padding: 14px 24px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  header h1 { font-size: 16px; font-weight: 600; margin: 0; }
+  header .sub { color: var(--ink2); font-size: 12px; }
+  .spacer { flex: 1; }
+  select, input, textarea, button {
+    font-family: inherit; font-size: 13px; border: 1px solid var(--line2);
+    border-radius: 8px; padding: 7px 10px; background: var(--card); color: var(--ink);
+  }
+  button { cursor: pointer; border-color: var(--accent); color: var(--accent); }
+  button:hover { background: var(--accent-soft); }
+  button.primary { background: var(--accent); color: #fff; }
+  button.primary:hover { opacity: .9; }
+  button.danger { border-color: var(--red); color: var(--red); }
+  button.mini { padding: 3px 8px; font-size: 12px; }
+  .layout { display: grid; grid-template-columns: 220px 1fr; gap: 16px; padding: 16px 24px; max-width: 1400px; }
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .panel h2 { font-size: 13px; font-weight: 600; margin: 0 0 12px; color: var(--ink2);
+              text-transform: uppercase; letter-spacing: .5px; }
+  .stats { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+          padding: 10px 16px; min-width: 110px; }
+  .stat b { display: block; font-size: 20px; font-weight: 600; }
+  .stat span { color: var(--ink2); font-size: 12px; }
+  .toolbar { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .toolbar input[type=text] { flex: 1; min-width: 200px; }
+  .list { display: flex; flex-direction: column; gap: 10px; }
+  .item { border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+  .item .meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+                font-size: 12px; color: var(--ink2); margin-bottom: 6px; }
+  .item .content { white-space: pre-wrap; word-break: break-word; }
+  .tag { background: var(--shell); border-radius: 999px; padding: 1px 8px; }
+  .type { border: 1px solid var(--line2); border-radius: 4px; padding: 0 6px; }
+  .item .actions { margin-top: 8px; display: flex; gap: 6px; }
+  .empty { color: var(--ink2); text-align: center; padding: 40px 0; }
+  .proj-item { padding: 8px 10px; border-radius: 6px; cursor: pointer; margin-bottom: 4px; }
+  .proj-item:hover { background: var(--shell); }
+  .proj-item.active { background: var(--accent-soft); color: var(--accent); font-weight: 500; }
+  .proj-item small { color: var(--ink2); display: block; font-size: 11px; }
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: none;
+           align-items: center; justify-content: center; z-index: 10; }
+  .modal.show { display: flex; }
+  .modal .box { background: var(--card); border-radius: 12px; padding: 24px;
+                width: min(540px, 92vw); }
+  .modal h3 { margin: 0 0 16px; font-size: 16px; }
+  .modal label { display: block; font-size: 12px; color: var(--ink2); margin: 10px 0 4px; }
+  .modal textarea { width: 100%; min-height: 100px; resize: vertical; }
+  .modal input { width: 100%; }
+  .modal .foot { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; }
+  .err { color: var(--red); font-size: 12px; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Portable Memory</h1>
+  <span class="sub">本地外挂记忆面板</span>
+  <div class="spacer"></div>
+  <span class="sub" id="connStatus">● 连接中</span>
+  <input type="password" id="tokenInput" placeholder="访问令牌（可选）" style="width:160px">
+  <button class="mini" onclick="loadAll()">刷新</button>
+</header>
+
+<div class="layout">
+  <div>
+    <div class="panel" style="margin-bottom:16px">
+      <h2>项目</h2>
+      <div id="projectList"></div>
+      <button class="mini" style="margin-top:10px;width:100%" onclick="openAddProject()">+ 新建项目</button>
+    </div>
+    <div class="panel">
+      <h2>会话</h2>
+      <div id="sessionList"></div>
+      <button class="mini" style="margin-top:10px;width:100%" onclick="startSession()">+ 新会话</button>
+    </div>
+  </div>
+
+  <div>
+    <div class="stats" id="stats"></div>
+    <div class="panel">
+      <h2>记忆库 <span id="memCount" style="color:var(--ink2)"></span></h2>
+      <div class="toolbar">
+        <input type="text" id="searchInput" placeholder="搜索记忆（Ctrl+Enter 提交）"
+               onkeydown="if(event.ctrlKey&&event.key==='Enter')doSearch()">
+        <button onclick="doSearch()">搜索</button>
+        <button onclick="clearSearch()">全部</button>
+        <div class="spacer"></div>
+        <button class="primary" onclick="openAddMemory()">+ 添加记忆</button>
+      </div>
+      <div class="list" id="memoryList"></div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="memoryModal">
+  <div class="box">
+    <h3 id="memModalTitle">添加记忆</h3>
+    <input type="hidden" id="editId">
+    <label>内容</label>
+    <textarea id="memContent" placeholder="写下要记住的偏好、决策、踩坑…"></textarea>
+    <label>类型</label>
+    <select id="memType">
+      <option value="fact">事实 fact</option>
+      <option value="preference">偏好 preference</option>
+      <option value="rule">规则 rule</option>
+      <option value="decision">决策 decision</option>
+      <option value="environment">环境 environment</option>
+      <option value="pitfall">踩坑 pitfall</option>
+    </select>
+    <label>标签（逗号分隔）</label>
+    <input type="text" id="memTags" placeholder="前端,分页">
+    <div class="foot">
+      <button onclick="closeModal('memoryModal')">取消</button>
+      <button class="primary" onclick="saveMemory()">保存</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="projectModal">
+  <div class="box">
+    <h3>新建项目</h3>
+    <label>命名空间（英文标识）</label>
+    <input type="text" id="newProjNs" placeholder="my-project">
+    <label>显示名称</label>
+    <input type="text" id="newProjName" placeholder="我的项目">
+    <div class="foot">
+      <button onclick="closeModal('projectModal')">取消</button>
+      <button class="primary" onclick="saveProject()">创建</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '';
+let currentNs = null;
+let searching = false;
+
+function token() { return document.getElementById('tokenInput').value.trim(); }
+function headers() {
+  const h = {'Content-Type':'application/json'};
+  const t = token();
+  if (t) h['Authorization'] = 'Bearer ' + t;
+  return h;
+}
+async function api(path, opts={}) {
+  const res = await fetch(API + path, {headers: headers(), ...opts});
+  if (res.status === 401) throw new Error('令牌无效');
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || '请求失败');
+  return data;
+}
+function esc(s) {
+  const d = document.createElement('div'); d.textContent = s ?? '';
+  return d.innerHTML;
+}
+function fmtTime(ts) {
+  if (!ts) return '-';
+  return new Date(ts*1000).toLocaleString('zh-CN', {hour12:false});
+}
+
+async function loadAll() {
+  try {
+    const h = await api('/health');
+    document.getElementById('connStatus').textContent = '● 已连接 v' + h.version;
+    document.getElementById('connStatus').style.color = 'var(--green)';
+  } catch (e) {
+    document.getElementById('connStatus').textContent = '● 未连接';
+    document.getElementById('connStatus').style.color = 'var(--red)';
+    return;
+  }
+  await Promise.all([loadProjects(), loadStats(), loadMemories(), loadSessions()]);
+}
+
+async function loadStats() {
+  const s = await api('/stats');
+  document.getElementById('stats').innerHTML = [
+    ['记忆总数', s.total], ['项目数', s.namespaces], ['累计访问', s.total_accesses]
+  ].map(([k,v]) => `<div class="stat"><b>${v}</b><span>${k}</span></div>`).join('');
+}
+
+async function loadProjects() {
+  const d = await api('/projects');
+  const el = document.getElementById('projectList');
+  if (!currentNs && d.items.length) currentNs = d.items[0].namespace;
+  el.innerHTML = d.items.map(p => `
+    <div class="proj-item ${p.namespace===currentNs?'active':''}"
+         onclick="switchProject('${esc(p.namespace)}')">
+      ${esc(p.name)} <small>${esc(p.namespace)}</small>
+    </div>`).join('') || '<div class="empty" style="padding:10px">暂无项目</div>';
+}
+
+async function switchProject(ns) {
+  currentNs = ns; searching = false;
+  document.getElementById('searchInput').value = '';
+  await Promise.all([loadProjects(), loadMemories(), loadSessions()]);
+}
+
+async function loadMemories() {
+  const path = searching
+    ? `/recall?query=${encodeURIComponent(document.getElementById('searchInput').value)}&limit=50${currentNs?'&namespace='+encodeURIComponent(currentNs):''}`
+    : `/list${currentNs?'?namespace='+encodeURIComponent(currentNs):''}`;
+  const d = await api(path);
+  const list = d.items || [];
+  document.getElementById('memCount').textContent = `(${list.length})`;
+  const el = document.getElementById('memoryList');
+  if (!list.length) {
+    el.innerHTML = '<div class="empty">暂无记忆，点右上角添加</div>'; return;
+  }
+  el.innerHTML = list.map(m => `
+    <div class="item">
+      <div class="meta">
+        <span class="type">${esc(m.type)}</span>
+        ${(m.tags||[]).map(t=>`<span class="tag">${esc(t)}</span>`).join('')}
+        <span>#${m.id}</span>
+        <span>${fmtTime(m.created_at)}</span>
+        <span>访问 ${m.access_count}</span>
+        ${m.score!==undefined?`<span>相关度 ${m.score}</span>`:''}
+      </div>
+      <div class="content">${esc(m.content)}</div>
+      <div class="actions">
+        <button class="mini" onclick="openEditMemory(${m.id}, ${JSON.stringify(esc(m.content))}, '${esc(m.type)}', '${esc((m.tags||[]).join(','))}')">编辑</button>
+        <button class="mini danger" onclick="deleteMemory(${m.id})">删除</button>
+      </div>
+    </div>`).join('');
+}
+
+async function doSearch() {
+  if (!document.getElementById('searchInput').value.trim()) { clearSearch(); return; }
+  searching = true; await loadMemories();
+}
+async function clearSearch() {
+  searching = false; document.getElementById('searchInput').value = ''; await loadMemories();
+}
+
+async function loadSessions() {
+  const path = `/sessions${currentNs?'?namespace='+encodeURIComponent(currentNs):''}`;
+  const d = await api(path);
+  const el = document.getElementById('sessionList');
+  el.innerHTML = d.items.map(s => `
+    <div class="proj-item" title="${esc(s.title)}">
+      ${esc(s.title || ('会话 #'+s.id))}
+      <small>${fmtTime(s.started_at)} · ${s.memory_count} 条记忆${s.ended_at?' · 已结束':''}</small>
+      ${s.ended_at?`<button class="mini danger" style="margin-top:4px" onclick="deleteSession(${s.id})">删除</button>`:''}
+    </div>`).join('') || '<div class="empty" style="padding:10px">暂无会话</div>';
+}
+
+async function startSession() {
+  const title = prompt('会话标题（可留空）：', '');
+  if (title === null) return;
+  await api('/sessions', {method:'POST', body: JSON.stringify({
+    namespace: currentNs || 'default', title, tool: 'webui'
+  })});
+  await loadSessions();
+}
+async function deleteSession(id) {
+  if (!confirm('删除会话 #'+id+'？')) return;
+  await api('/sessions/'+id, {method:'DELETE'}); await loadSessions();
+}
+
+function openAddMemory() {
+  document.getElementById('editId').value = '';
+  document.getElementById('memContent').value = '';
+  document.getElementById('memType').value = 'fact';
+  document.getElementById('memTags').value = '';
+  document.getElementById('memModalTitle').textContent = '添加记忆';
+  document.getElementById('memoryModal').classList.add('show');
+}
+function openEditMemory(id, content, type, tags) {
+  document.getElementById('editId').value = id;
+  document.getElementById('memContent').value = content;
+  document.getElementById('memType').value = type;
+  document.getElementById('memTags').value = tags;
+  document.getElementById('memModalTitle').textContent = '编辑记忆 #'+id;
+  document.getElementById('memoryModal').classList.add('show');
+}
+function closeModal(id) { document.getElementById(id).classList.remove('show'); }
+
+async function saveMemory() {
+  const id = document.getElementById('editId').value;
+  const payload = {
+    content: document.getElementById('memContent').value,
+    type: document.getElementById('memType').value,
+    tags: document.getElementById('memTags').value.split(',').map(s=>s.trim()).filter(Boolean),
+    namespace: currentNs || 'default'
+  };
+  if (!payload.content.trim()) { alert('内容不能为空'); return; }
+  if (id) await api('/memory/'+id, {method:'PUT', body: JSON.stringify(payload)});
+  else await api('/remember', {method:'POST', body: JSON.stringify(payload)});
+  closeModal('memoryModal'); await Promise.all([loadMemories(), loadStats()]);
+}
+async function deleteMemory(id) {
+  if (!confirm('删除记忆 #'+id+'？')) return;
+  await api('/memory/'+id, {method:'DELETE'});
+  await Promise.all([loadMemories(), loadStats()]);
+}
+
+function openAddProject() { document.getElementById('projectModal').classList.add('show'); }
+async function saveProject() {
+  const ns = document.getElementById('newProjNs').value.trim();
+  const name = document.getElementById('newProjName').value.trim();
+  if (!ns) { alert('命名空间不能为空'); return; }
+  await api('/projects/register', {method:'POST', body: JSON.stringify({namespace:ns, name})});
+  closeModal('projectModal');
+  document.getElementById('newProjNs').value = '';
+  document.getElementById('newProjName').value = '';
+  await Promise.all([loadProjects(), loadStats()]);
+}
+
+loadAll();
+</script>
+</body>
+</html>

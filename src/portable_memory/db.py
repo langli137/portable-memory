@@ -116,6 +116,11 @@ class Store:
         self._conn.executescript(SCHEMA)
         self._conn.commit()
 
+    @property
+    def conn(self) -> sqlite3.Connection:
+        """Shared connection for companion tables (workspace)."""
+        return self._conn
+
     def close(self) -> None:
         self._conn.close()
 
@@ -212,7 +217,7 @@ class Store:
         clean, _ = redact(content)
         self._conn.execute(
             "UPDATE memories SET content = ?, hash = ?, updated_at = ? WHERE id = ?",
-            clean, content_hash(clean), time.time(), memory_id
+            (clean, content_hash(clean), time.time(), memory_id)
         )
         self._conn.commit()
         return self.get(memory_id)

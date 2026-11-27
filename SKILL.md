@@ -18,7 +18,17 @@ decay. All data stays on the user's machine.
 - "记住 / remember / 别忘了" — store a preference, decision, or pitfall.
 - "之前我们定了什么 / what did we decide" — recall a past fact.
 - "忘了这条 / forget" — soft-delete a memory.
+- "哪个项目 / 切换项目" — list or switch project namespaces.
+- "这个会话 / 开始会话 / 结束会话" — manage session lifecycle.
 - "配置记忆 / 接入编辑器" — register the MCP server into editors.
+- "打开面板 / 可视化" — open `http://127.0.0.1:8765/ui`.
+
+## Project isolation
+
+When running inside a project, namespace is auto-detected from `.pmem.json`
+(walking up from cwd). Do not hardcode `default` unless no marker exists.
+Create one with `python -m portable_memory init <namespace>` in the project root.
+Never mix one project's architecture into another project's namespace.
 
 ## Setup check
 

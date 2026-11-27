@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, urlparse
 from .config import Config
 from .db import Store
 from .pipeline import Retriever, capture, seed_from_markdown
+from .workspace import Workspace
 
 TIME_FMT = "%Y-%m-%d"
 
@@ -29,21 +30,40 @@ class MemoryService:
         config.ensure_data_dir()
         self.store = Store(config.db_path)
         self.retriever = Retriever(self.store, config)
+        self.workspace = Workspace(self.store.conn)
 
     def remember(self, payload: dict) -> dict:
         text = payload.get("content") or payload.get("text")
         if not isinstance(text, str) or not text.strip():
             raise ValueError("content is required")
+        namespace = payload.get("namespace") or "default"
+        session_id = payload.get("session_id")
+        source = payload.get("source", "")
+        if session_id:
+            source = f"session:{session_id}"
+        self.workspace.register_project(namespace)
         mem, status = capture(
             self.store,
             text,
             memory_type=payload.get("type", "fact"),
-            namespace=payload.get("namespace", "default"),
-            source=payload.get("source", ""),
+            namespace=namespace,
+            source=source,
             tags=payload.get("tags") or [],
             importance=float(payload.get("importance", 1.0)),
         )
+        if session_id:
+            session = self.workspace.get_session(int(session_id))
+            if session:
+                self.conn.execute(
+                    "UPDATE sessions SET memory_count = memory_count + 1 WHERE id = ?",
+                    (int(session_id),),
+                )
+                self.conn.commit()
         return {"status": status, "memory": mem.to_dict() if mem else None}
+
+    @property
+    def conn(self):
+        return self.store.conn
 
     def recall(self, params: dict) -> dict:
         query = params.get("query") or params.get("q") or ""
@@ -80,6 +100,58 @@ class MemoryService:
 
     def stats(self) -> dict:
         return self.store.stats()
+
+    # ---- workspace: projects + sessions ----
+    def projects(self) -> dict:
+        items = [p.to_dict() for p in self.workspace.projects()]
+        return {"count": len(items), "items": items}
+
+    def register_project(self, payload: dict) -> dict:
+        ns = payload.get("namespace")
+        if not ns:
+            raise ValueError("namespace is required")
+        p = self.workspace.register_project(
+            str(ns),
+            payload.get("name", ""),
+            payload.get("path", ""),
+            payload.get("description", ""),
+        )
+        return {"project": p.to_dict()}
+
+    def sessions(self, params: dict) -> dict:
+        items = [s.to_dict() for s in self.workspace.sessions(
+            params.get("namespace"), _to_int(params.get("limit"), 50)
+        )]
+        return {"count": len(items), "items": items}
+
+    def session_open(self, payload: dict) -> dict:
+        s = self.workspace.session_open(
+            payload.get("namespace", "default"),
+            payload.get("title", ""),
+            payload.get("tool", ""),
+        )
+        return {"session": s.to_dict()}
+
+    def session_close(self, payload: dict) -> dict:
+        sid = payload.get("id")
+        if sid is None:
+            raise ValueError("id is required")
+        mc = payload.get("memory_count")
+        s = self.workspace.session_close(
+            int(sid), payload.get("summary", ""),
+            int(mc) if mc is not None else None,
+        )
+        return {"session": s.to_dict() if s else None}
+
+    def session_delete(self, session_id: int) -> dict:
+        return {"deleted": self.workspace.delete_session(session_id), "id": session_id}
+
+    def update_memory(self, memory_id: int, payload: dict) -> dict:
+        content = payload.get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("content is required")
+        mem = self.store.update(memory_id, content)
+        return {"memory": mem.to_dict() if mem else None}
 
 
 def _parse_date(value: Any) -> float | None:
@@ -120,6 +192,14 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _send_file(self, path: Path, content_type: str) -> None:
+        data = path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def _body(self) -> dict:
         length = int(self.headers.get("Content-Length", "0"))
         if not length:
@@ -135,14 +215,35 @@ class Handler(BaseHTTPRequestHandler):
         raise ValueError(f"invalid JSON body: {last_error}")
 
     def _handle(self, method: str) -> None:
-        if not self._authorized():
-            self._send(401, {"error": "unauthorized"})
-            return
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/") or "/"
         params = {k: v[-1] for k, v in parse_qs(parsed.query).items()}
 
         try:
+            # Web UI (static assets) — served before auth so the page can load
+            # and then call the API with a token entered by the user.
+            if path in ("/ui", "/ui/"):
+                self._send_file(
+                    Path(__file__).parent.parent / "webui" / "index.html",
+                    "text/html; charset=utf-8",
+                )
+                return
+            if path.startswith("/ui/"):
+                rel = path[len("/ui/"):]
+                asset = Path(__file__).parent.parent / "webui" / rel
+                if asset.is_file() and asset.parent == (Path(__file__).parent.parent / "webui"):
+                    ctype = "text/css; charset=utf-8" if rel.endswith(".css") else \
+                            "application/javascript; charset=utf-8" if rel.endswith(".js") else \
+                            "application/octet-stream"
+                    self._send_file(asset, ctype)
+                    return
+                self._send(404, {"error": "not found"})
+                return
+
+            if not self._authorized():
+                self._send(401, {"error": "unauthorized"})
+                return
+
             if path == "/health":
                 self._send(200, {"ok": True, "version": "0.1.0"})
             elif path == "/remember" and method == "POST":
@@ -157,9 +258,28 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, self.service.export())
             elif path == "/seed" and method == "POST":
                 self._send(200, self.service.seed(self._body()))
-            elif re.match(r"^/memory/\d+$", path) and method == "DELETE":
+            elif path == "/projects":
+                self._send(200, self.service.projects())
+            elif path == "/projects/register" and method == "POST":
+                self._send(200, self.service.register_project(self._body()))
+            elif path == "/sessions":
+                if method == "POST":
+                    self._send(200, self.service.session_open(self._body()))
+                else:
+                    self._send(200, self.service.sessions(params))
+            elif path == "/sessions/close" and method == "POST":
+                self._send(200, self.service.session_close(self._body()))
+            elif re.match(r"^/sessions/\d+$", path) and method == "DELETE":
+                sid = int(path.rsplit("/", 1)[1])
+                self._send(200, self.service.session_delete(sid))
+            elif re.match(r"^/memory/\d+$", path):
                 mid = int(path.rsplit("/", 1)[1])
-                self._send(200, self.service.forget(mid))
+                if method == "DELETE":
+                    self._send(200, self.service.forget(mid))
+                elif method == "PUT":
+                    self._send(200, self.service.update_memory(mid, self._body()))
+                else:
+                    self._send(404, {"error": "not found"})
             else:
                 self._send(404, {"error": "not found"})
         except ValueError as exc:
@@ -175,6 +295,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:  # noqa: N802
         self._handle("DELETE")
+
+    def do_PUT(self) -> None:  # noqa: N802
+        self._handle("PUT")
 
 
 def serve(config: Config) -> None:

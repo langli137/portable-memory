@@ -1,8 +1,19 @@
 # portable-memory
 
-跨编辑器、跨会话的**本地外挂记忆系统**。一个 Python 服务负责捕获、去重、检索和召回，通过 MCP / REST 暴露给所有 AI 编辑器；DeepSeek Harness 通过上层插件适配。
+跨编辑器、跨会话的**本地外挂记忆系统**。一个 Python 服务负责捕获、去重、检索和召回，通过 MCP / REST 暴露给所有 AI 编辑器；DeepSeek Harness 通过上层插件适配。带**本地 Web 面板**，可可视化管理项目、会话和记忆。
 
 零第三方依赖（Python 3.9+ 标准库即可运行），数据全部留在你本机。
+
+## Web 面板
+
+启动服务后打开 `http://127.0.0.1:8765/ui`：
+
+- **项目切换**：顶部列出所有项目，点击即可查看该项目的记忆，互不干扰；
+- **会话管理**：左侧记录每次协作，可新建、结束、删除会话；
+- **记忆增删查改**：搜索、添加、编辑、删除记忆，按类型/标签过滤；
+- **统计**：记忆总数、项目数、累计访问次数。
+
+如果设置了 `PMEM_TOKEN`，在页面右上角输入令牌即可。
 
 ## 和静态记忆文件的区别
 
@@ -41,6 +52,33 @@ python -m portable_memory stats
 
 Windows 用 `set PYTHONPATH=%CD%\src` 或在安装脚本里自动配。
 
+### 项目隔离与自动识别
+
+在每个项目根目录跑一次 `init`，生成 `.pmem.json` 标记文件：
+
+```bash
+cd /path/to/my-project
+python -m portable_memory init my-project --name "我的项目"
+```
+
+之后在这个目录（含子目录）里，CLI 和 MCP 会自动识别项目，记忆自动归到对应 namespace——**换项目不用手动切**。面板顶部也能随时手动切换查看。
+
+```bash
+python -m portable_memory project list          # 列出所有项目
+python -m portable_memory project add --namespace x --name "X"   # 手动注册
+```
+
+### 会话管理
+
+```bash
+python -m portable_memory session start --title "支付模块联调"
+python -m portable_memory remember "支付回调要用幂等键" --session 1 --type decision
+python -m portable_memory session close --id 1 --summary "确定幂等方案"
+python -m portable_memory session list
+```
+
+MCP 客户端可用 `session_start` / `session_end` 工具。会话记录标题、起止时间、摘要和关联记忆数，可在面板回溯。
+
 ### 安装为命令
 
 ```bash
@@ -72,14 +110,23 @@ python scripts/setup_editors.py --all --repo-root /path/to/project
 | GET | `/list?namespace=` | 列出记忆 |
 | GET | `/stats` | 统计 |
 | DELETE | `/memory/{id}` | 软删除 |
+| PUT | `/memory/{id}` | 编辑记忆内容 |
 | POST | `/export` | 导出 Markdown 镜像 |
 | POST | `/seed` | 从 Markdown 模板批量导入 |
+| GET | `/projects` | 列出项目 |
+| POST | `/projects/register` | 注册项目 |
+| GET | `/sessions?namespace=` | 列出会话 |
+| POST | `/sessions` | 新建会话 |
+| POST | `/sessions/close` | 结束会话 |
+| DELETE | `/sessions/{id}` | 删除会话 |
 
 ## MCP 工具
 
-编辑器可直接调用：`memory_add`、`memory_recall`、`memory_list`、`memory_delete`。
+编辑器可直接调用：`memory_add`、`memory_recall`、`memory_list`、`memory_delete`、`session_start`、`session_end`、`project_list`。
 
-建议使用时机：会话开始时 `memory_recall` 当前任务；用户明确表达偏好时 `memory_add`。
+建议使用时机：会话开始时 `memory_recall` 当前任务；用户明确表达偏好时 `memory_add`；协作开始时 `session_start`，结束时 `session_end` 并写摘要。
+
+namespace 缺省时自动从当前目录的 `.pmem.json` 推断，所以同一套 MCP 配置跨项目复用，记忆天然隔离。
 
 ## 配置项
 
@@ -114,10 +161,13 @@ PYTHONPATH=src python -m unittest discover -s tests -v
 src/portable_memory/
   config.py     配置
   db.py         SQLite 存储、去重、脱敏、导入导出
+  workspace.py  项目注册、会话管理、.pmem.json 自动识别
   pipeline.py   捕获/处理/召回、BM25、衰减
-  server.py     REST 服务
+  server.py     REST 服务 + Web 面板托管
   mcp.py        MCP stdio 桥接
   cli.py        命令行入口
+src/webui/
+  index.html    零依赖可视化面板
 scripts/
   setup_editors.py   编辑器 MCP 自动配置
 dsh-plugin/     DeepSeek Harness 适配层（骨架）
