@@ -59,6 +59,8 @@ class MemoryService:
                     (int(session_id),),
                 )
                 self.conn.commit()
+        if status != "duplicate":
+            self.retriever.invalidate(namespace)
         return {"status": status, "memory": mem.to_dict() if mem else None}
 
     @property
@@ -87,7 +89,10 @@ class MemoryService:
         return {"count": len(mems), "items": [m.to_dict() for m in mems]}
 
     def forget(self, memory_id: int) -> dict:
-        return {"deleted": self.store.delete(memory_id), "id": memory_id}
+        deleted = self.store.delete(memory_id)
+        if deleted:
+            self.retriever.invalidate()  # soft-delete: namespace unknown without a read
+        return {"deleted": deleted, "id": memory_id}
 
     def export(self) -> dict:
         path = self.config.data_dir / "memory.md"
@@ -96,7 +101,11 @@ class MemoryService:
 
     def seed(self, payload: dict) -> dict:
         path = Path(payload.get("path", ""))
-        return seed_from_markdown(self.store, path, payload.get("namespace", "default"))
+        ns = payload.get("namespace", "default")
+        result = seed_from_markdown(self.store, path, ns)
+        if result.get("added"):
+            self.retriever.invalidate(ns)
+        return result
 
     def stats(self) -> dict:
         return self.store.stats()
@@ -156,6 +165,8 @@ class MemoryService:
         if not isinstance(content, str) or not content.strip():
             raise ValueError("content is required")
         mem = self.store.update(memory_id, content)
+        if mem:
+            self.retriever.invalidate(mem.namespace)
         return {"memory": mem.to_dict() if mem else None}
 
 

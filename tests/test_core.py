@@ -52,6 +52,24 @@ class TestGates(unittest.TestCase):
         self.assertEqual(s2, "duplicate")
         self.assertEqual(m1.id, m2.id)
 
+    def test_touch_many_increments_each_once(self):
+        m1, _ = self.store.add("alpha memory")
+        m2, _ = self.store.add("beta memory")
+        self.store.touch_many([m1.id, m2.id, m1.id])
+        self.assertEqual(self.store.get(m1.id).access_count, 2)
+        self.assertEqual(self.store.get(m2.id).access_count, 1)
+
+    def test_cache_invalidates_after_write(self):
+        self.store.add("分页默认 10 条", tags=["分页"])
+        r = Retriever(self.store, self.config)
+        first = r.recall("分页", limit=1)
+        self.assertEqual(len(first), 1)
+        self.assertIn("分页", first[0].matched_terms)
+        # A write changes the fingerprint -> cached index must be rebuilt.
+        self.store.add("分页改成 20 条", tags=["分页"])
+        r2 = r.recall("分页改成 20 条", limit=2)
+        self.assertTrue(any("20" in s.memory.content for s in r2))
+
     def test_recall_ranks_relevant_first(self):
         self.store.add("分页默认 10 条，不开特例", tags=["分页"])
         self.store.add("curl 必须 noproxy")

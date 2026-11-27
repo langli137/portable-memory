@@ -200,9 +200,21 @@ class Store:
         return [Memory.from_row(r) for r in rows]
 
     def touch(self, memory_id: int) -> None:
-        self._conn.execute(
+        self.touch_many([memory_id])
+
+    def touch_many(self, memory_ids: list[int]) -> None:
+        """Bump access counters in one transaction.
+
+        Recall touches several memories; committing once instead of per-id
+        avoids one disk fsync per memory (the dominant recall cost).
+        """
+        if not memory_ids:
+            return
+        now = time.time()
+        self._conn.executemany(
             "UPDATE memories SET access_count = access_count + 1, last_accessed = ? "
-            "WHERE id = ?", (time.time(), memory_id)
+            "WHERE id = ?",
+            [(now, mid) for mid in memory_ids],
         )
         self._conn.commit()
 

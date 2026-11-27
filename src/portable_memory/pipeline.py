@@ -58,10 +58,78 @@ class Scored:
         return d
 
 
+@dataclass
+class _Index:
+    """Cached tokenized corpus + BM25 statistics for one namespace.
+
+    Rebuilt only when the underlying memories change. All data is derived
+    from real stored content — the cache stores no fabricated values.
+    """
+
+    fingerprint: tuple[int, int, float]
+    tokens: dict[int, list[str]]
+    df: dict[str, int]
+    avgdl: float
+    count: int
+
+
 class Retriever:
     def __init__(self, store: Store, config: Config):
         self.store = store
         self.config = config
+        # namespace -> cached index. Process-local; rebuilt automatically on
+        # restart, invalidated by data fingerprint on every write.
+        self._index: dict[str, _Index] = {}
+
+    @staticmethod
+    def _fingerprint(corpus: list[Memory]) -> tuple[int, int, float]:
+        """Detect content changes without scanning memory text.
+
+        - count: catches add / soft-delete
+        - max id: catches id reuse edge cases
+        - sum(updated_at): catches edit (content/tags/type changes)
+
+        `touch()` only changes access_count / last_accessed, so a read does
+        NOT invalidate the index — that is the whole point of the cache.
+        """
+        return (
+            len(corpus),
+            max((m.id for m in corpus), default=0),
+            round(sum(m.updated_at for m in corpus), 3),
+        )
+
+    def _get_index(self, namespace: str, corpus: list[Memory]) -> _Index:
+        fp = self._fingerprint(corpus)
+        cached = self._index.get(namespace)
+        if cached is not None and cached.fingerprint == fp:
+            return cached
+
+        # Build token index once per corpus version.
+        tokens: dict[int, list[str]] = {}
+        df: dict[str, int] = {}
+        total_len = 0
+        for m in corpus:
+            d = tokenize(m.content + " " + " ".join(m.tags))
+            tokens[m.id] = d
+            total_len += len(d)
+            for t in set(d):
+                df[t] = df.get(t, 0) + 1
+        index = _Index(
+            fingerprint=fp,
+            tokens=tokens,
+            df=df,
+            avgdl=(total_len / len(corpus)) if corpus else 1.0,
+            count=len(corpus),
+        )
+        self._index[namespace] = index
+        return index
+
+    def invalidate(self, namespace: str | None = None) -> None:
+        """Drop cached index(es) after a write. Safe to call redundantly."""
+        if namespace is None:
+            self._index.clear()
+        else:
+            self._index.pop(namespace, None)
 
     def recall(
         self,
@@ -86,13 +154,21 @@ class Retriever:
             return [self._score(m, 0.0, query) for m in top[:limit]]
 
         q_tokens = tokenize(query)
-        docs = [tokenize(m.content + " " + " ".join(m.tags)) for m in corpus]
+        # Tokenize is the hot path. Read per-memory tokens from the cache;
+        # BM25 statistics (df/avgdl) are cached only for the unfiltered case,
+        # since filters change the effective corpus.
+        index = self._get_index(namespace or "", corpus)
+        docs = [index.tokens[m.id] for m in corpus]
         n = len(docs)
-        avgdl = sum(len(d) for d in docs) / n or 1.0
-        df: dict[str, int] = {}
-        for d in docs:
-            for t in set(d):
-                df[t] = df.get(t, 0) + 1
+        if memory_type is None and since is None and until is None:
+            df = index.df
+            avgdl = index.avgdl
+        else:
+            avgdl = sum(len(d) for d in docs) / n or 1.0
+            df = {}
+            for d in docs:
+                for t in set(d):
+                    df[t] = df.get(t, 0) + 1
         k1, b = 1.5, 0.75
 
         results: list[Scored] = []
@@ -108,33 +184,33 @@ class Retriever:
                 idf = math.log(1.0 + (n - freq + 0.5) / (freq + 0.5))
                 denom = tf[t] + k1 * (1 - b + b * len(d) / avgdl)
                 bm25 += idf * (tf[t] * (k1 + 1)) / denom
-            results.append(self._score(m, bm25, query))
+            results.append(self._score(m, bm25, query, doc_tokens=d))
 
         results.sort(key=lambda s: s.score, reverse=True)
         top = results[:limit]
-        for s in top:
-            self.store.touch(s.memory.id)
+        self.store.touch_many([s.memory.id for s in top])
         return top
 
     @staticmethod
-    def _matched_terms(m: Memory, query: str) -> list[str]:
+    def _matched_terms(query: str, doc_tokens: set[str] | None = None) -> list[str]:
         """Query tokens actually present in the memory, in query order, de-duplicated.
 
         Used by the UI to explain *why* a memory surfaced. Purely derived from
         the same tokenizer as BM25 — no extra index, no fabricated data.
+        When doc_tokens is supplied the caller reuses the cached tokenization.
         """
         if not query.strip():
             return []
-        doc_tokens = set(tokenize(m.content + " " + " ".join(m.tags)))
+        doc_set = set(doc_tokens) if doc_tokens is not None else set()
         seen: set[str] = set()
         matched: list[str] = []
         for t in tokenize(query):
-            if t in doc_tokens and t not in seen:
+            if t in doc_set and t not in seen:
                 seen.add(t)
                 matched.append(t)
         return matched
 
-    def _score(self, m: Memory, bm25: float, query: str) -> Scored:
+    def _score(self, m: Memory, bm25: float, query: str, doc_tokens: list[str] | None = None) -> Scored:
         age_days = max(0.0, (time.time() - m.created_at) / 86400.0)
         half = max(self.config.decay_half_life_days, 0.1)
         recency = 0.5 ** (age_days / half)
@@ -147,7 +223,7 @@ class Retriever:
             bm25=bm25,
             recency=recency,
             frequency=frequency,
-            matched_terms=self._matched_terms(m, query),
+            matched_terms=self._matched_terms(query, doc_tokens),
         )
 
 
