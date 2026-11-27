@@ -1,6 +1,6 @@
 ---
 name: portable-memory
-description: This skill installs and maintains a cross-project "external memory" system for a user. It should be used when the user asks to remember a preference long-term, set up or update cross-project memory, install memory into an AI editor (WorkBuddy, Claude Code, Cursor, CodeBuddy, GitHub Copilot, Windsurf), or asks what personal settings are remembered. It writes a single concise memory body into the correct global entry point of each editor via scripts/install.py.
+description: This skill manages a local long-term memory service for the user. Use it when the user says remember this, forget that, what do you remember, search my memory, set up cross-editor memory, or asks about past preferences, decisions, and project facts. It stores and recalls memories through the portable-memory Python service via CLI or MCP tools.
 agent_created: true
 ---
 
@@ -8,75 +8,83 @@ agent_created: true
 
 ## Overview
 
-Maintain one concise, cross-project memory body and install it into the user's
-AI editors. Project-specific facts do not belong here — they go into the
-project's own memory directory. The skill is the installer and maintainer; the
-memory body itself is auto-injected by the editor at session start.
+Manage the user's cross-session, cross-project long-term memory. The memory
+engine is a local Python service in this repository. It captures observations,
+deduplicates and redacts them, and recalls relevant items with BM25 plus time
+decay. All data stays on the user's machine.
 
 ## When to use
 
-- User states a stable preference ("always do X", "never do Y", "remember Z").
-- User asks to set up, reinstall, update, or remove cross-project memory.
-- User asks which editors are supported or which settings are remembered.
+- "记住 / remember / 别忘了" — store a preference, decision, or pitfall.
+- "之前我们定了什么 / what did we decide" — recall a past fact.
+- "忘了这条 / forget" — soft-delete a memory.
+- "配置记忆 / 接入编辑器" — register the MCP server into editors.
 
-## Decide scope before writing
+## Setup check
 
-Ask or infer which layer the information belongs to:
+Before first use, locate the repository (this skill's directory). The CLI is
+invoked with the package on PYTHONPATH:
 
-| Layer | Location | Content |
-|-------|----------|---------|
-| Cross-project | editor global memory | Preferences, environment facts, work habits, code principles |
-| Project-only | `.ai-memory/` or `.workbuddy/memory/` in that repo | Architecture, field semantics, bug history, domain rules |
+```bash
+PYTHONPATH=<repo>/src python -m portable_memory <command>
+```
 
-If uncertain, treat it as project-only. Never put one project's architecture
-into the cross-project body.
+Windows PowerShell:
+```powershell
+$env:PYTHONPATH="<repo>\src"; python -m portable_memory <command>
+```
+
+If the MCP server is registered, prefer the `memory_add` / `memory_recall`
+tools; otherwise fall back to the CLI.
 
 ## Workflow
 
-### 1. Install or update
-
-1. Read `references/memory-core.md` to see the current body.
-2. To add a new preference, append it to the matching section and add a dated
-   row to the change log. Keep the file concise — editors cap memory size.
-3. Run the installer:
-
-   ```bash
-   python scripts/install.py --list
-   python scripts/install.py --all
-   # or a subset:
-   python scripts/install.py --editors workbuddy,claude --dry-run
-   ```
-
-4. Report which targets were written and their paths. The installer is
-   idempotent: it replaces a managed block in place and preserves text outside
-   it, so re-running never duplicates content.
-
-### 2. Uninstall
+### Store
 
 ```bash
-python scripts/install.py --uninstall --editors workbuddy
+python -m portable_memory remember "内容" --type rule --tags "标签" --namespace default
 ```
 
-This removes only the managed block; user-authored memory stays intact.
+Types: `fact`, `preference`, `rule`, `decision`, `environment`, `pitfall`.
+Report the returned `status`: `added`, `duplicate`, or `redacted`.
 
-### 3. Answer "what do you remember"
+### Recall
 
-Read `references/memory-core.md` and summarize the sections. Do not invent
-entries that are not in the file.
+```bash
+python -m portable_memory recall "查询词" --limit 8
+```
 
-## Supported editors
+Recall at the start of a task when past context may matter. Results include
+score details — use them to judge relevance, do not blindly follow every item.
 
-| Key | Editor | Entry point | Scope |
-|-----|--------|-------------|-------|
-| `workbuddy` | WorkBuddy | `~/.workbuddy/user-*/MEMORY.md` | user, auto-injected |
-| `claude` | Claude Code | `~/.claude/CLAUDE.md` | user, auto-injected |
-| `cursor` | Cursor | `~/.cursorrules` or `~/.cursor/rules/*.mdc` | user, auto-injected |
-| `codebuddy` | CodeBuddy | `~/.codebuddy/rules/*.mdc` | user, verify injection |
-| `copilot` | GitHub Copilot | `.github/copilot-instructions.md` | project, run per repo |
-| `windsurf` | Windsurf | `~/.windsurfrules` | user, auto-injected |
+### Delete / list / stats / export
+
+```bash
+python -m portable_memory forget <id>
+python -m portable_memory list --namespace default
+python -m portable_memory stats
+python -m portable_memory export
+```
+
+### Register into editors
+
+```bash
+python scripts/setup_editors.py --all --dry-run
+python scripts/setup_editors.py --all
+```
+
+Supported: Claude Code, Cursor, Windsurf, WorkBuddy, DeepSeek Harness, Copilot.
+
+## Scope rule
+
+- Cross-project preferences, environment facts, work habits → memory service.
+- One project's architecture, field semantics, bug history → that project's
+  own memory directory (`.ai-memory/` or `.workbuddy/memory/`).
+
+Never store one project's architecture into cross-project memory.
 
 ## Guardrails
 
-- Never overwrite user-authored memory; only touch the managed block.
-- Never claim memory is active in an editor that was not written.
-- Keep the body under the size cap of the strictest installed editor.
+- The service redacts secrets on write, but still avoid storing credentials.
+- Soft-delete is reversible only via direct DB access; confirm before deleting.
+- If the engine is unreachable, say so; do not fabricate memories.

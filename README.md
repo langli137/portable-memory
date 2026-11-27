@@ -1,74 +1,129 @@
 # portable-memory
 
-一个跨编辑器的「外挂记忆」系统：把同一份长期记忆写进各 AI 编辑器的全局记忆入口，让每个新会话都自动带上你的偏好、环境事实和工作习惯，不用每次重新讲一遍。
+跨编辑器、跨会话的**本地外挂记忆系统**。一个 Python 服务负责捕获、去重、检索和召回，通过 MCP / REST 暴露给所有 AI 编辑器；DeepSeek Harness 通过上层插件适配。
 
-## 为什么需要
+零第三方依赖（Python 3.9+ 标准库即可运行），数据全部留在你本机。
 
-AI 每次开新会话都是失忆的。解决方案不是让模型记住，而是把规矩写进它启动时必读的文件。本项目提供：
+## 和静态记忆文件的区别
 
-1. **一份核心记忆**：精简、脱敏、跨项目通用（沟通偏好 / 代码原则 / 本机环境 / 工作习惯）。
-2. **一个安装脚本**：自动识别编辑器、写入对应入口、幂等更新、不覆盖你自己写的内容。
-3. **一个 WorkBuddy Skill**：在对话里就能安装、更新、卸载、查询记忆。
+| | 静态 CLAUDE.md / MEMORY.md | portable-memory |
+|---|---|---|
+| 记录 | 手动写 | hook / MCP 自动捕获 |
+| 检索 | 全量塞进上下文 | BM25 按需召回相关项 |
+| 去重 | 无 | SHA-256 内容指纹 |
+| 隐私 | 无 | 写入前自动脱敏密钥 |
+| 时效 | 永久有效、会过时 | 时间衰减 + 重要性排序 |
+| 纠错 | 手工改文件 | `memory_delete` / `forget` |
+| 跨编辑器 | 每个工具一份 | 一个服务，MCP 通用 |
 
-项目专属的架构、字段口径、踩坑史不进这里，留在各自项目的记忆目录。
+## 架构（两层）
 
-## 支持的编辑器
+```
+上层：DSH 插件 / WorkBuddy Skill  ── 适配各编辑器的事件与注入时机
+                    │ MCP
+下层：Python 记忆服务（本仓库）  ── 捕获 → 处理 → 召回 → SQLite 存储
+```
 
-| Key | 编辑器 | 记忆入口 | 作用域 |
-|-----|--------|----------|--------|
-| `workbuddy` | WorkBuddy | `~/.workbuddy/user-*/MEMORY.md` | 用户级，自动注入 |
-| `claude` | Claude Code | `~/.claude/CLAUDE.md` | 用户级，自动注入 |
-| `cursor` | Cursor | `~/.cursorrules` 或 `~/.cursor/rules/*.mdc` | 用户级，自动注入 |
-| `codebuddy` | CodeBuddy | `~/.codebuddy/rules/*.mdc` | 用户级，注入行为因版本而异，需自测 |
-| `copilot` | GitHub Copilot | `.github/copilot-instructions.md` | 项目级，每个仓库跑一次 |
-| `windsurf` | Windsurf | `~/.windsurfrules` | 用户级，自动注入 |
+底层编辑器无关，换框架不用重写；上层只是一层薄适配器。
 
-## 安装
-
-### 作为 WorkBuddy Skill
-
-把整个目录放到 `~/.workbuddy/skills/portable-memory/`，或直接让 WorkBuddy 加载本仓库。之后对话里说"安装我的跨项目记忆"即可。
-
-### 作为命令行工具
+## 快速开始
 
 ```bash
-# 看看检测到哪些编辑器
-python scripts/install.py --list
+git clone <this-repo>
+cd portable-memory
 
-# 预览将写入什么（不落盘）
-python scripts/install.py --all --dry-run
-
-# 装到所有检测到的编辑器
-python scripts/install.py --all
-
-# 只装指定的
-python scripts/install.py --editors workbuddy,claude
+# 直接跑 CLI（无需安装依赖）
+export PYTHONPATH=$PWD/src
+python -m portable_memory remember "分页默认 10 条，不开特例" --type rule
+python -m portable_memory recall "分页 默认多少条"
+python -m portable_memory stats
 ```
 
-需要 Python 3.9+，无第三方依赖。
+Windows 用 `set PYTHONPATH=%CD%\src` 或在安装脚本里自动配。
 
-## 自定义记忆内容
-
-编辑 `references/memory-core.md`，然后重新运行安装脚本。推荐保持精简——各编辑器对用户记忆有字符上限（WorkBuddy 用户级为 4000 字符）。
-
-脚本用标记块管理内容：
-
-```
-<!-- portable-memory:START -->
-...记忆正文...
-<!-- portable-memory:END -->
-```
-
-标记块之外的内容不会被覆盖。
-
-## 卸载
+### 安装为命令
 
 ```bash
-python scripts/install.py --uninstall --all
+pip install -e .
+pmem serve      # 启动 HTTP 服务
+pmem mcp        # 以 MCP stdio 方式运行（供编辑器调用）
 ```
 
-只移除标记块，你自己写的记忆保留。
+## 接入编辑器
 
-## 许可
+```bash
+python scripts/setup_editors.py --list
+python scripts/setup_editors.py --all --dry-run
+python scripts/setup_editors.py --all --repo-root /path/to/project
+```
+
+支持：Claude Code、Cursor、Windsurf、WorkBuddy、DeepSeek Harness、GitHub Copilot。
+脚本把 MCP 服务注册到各自的配置文件，指向 `python -m portable_memory mcp`。
+
+## REST API
+
+服务默认监听 `127.0.0.1:8765`，设置 `PMEM_TOKEN` 后需 `Authorization: Bearer <token>`。
+
+| 方法 | 端点 | 说明 |
+|------|------|------|
+| GET | `/health` | 健康检查 |
+| POST | `/remember` | 写入 `{content, type, namespace, tags, importance}` |
+| GET | `/recall?query=&namespace=&limit=` | 检索（BM25 + 衰减） |
+| GET | `/list?namespace=` | 列出记忆 |
+| GET | `/stats` | 统计 |
+| DELETE | `/memory/{id}` | 软删除 |
+| POST | `/export` | 导出 Markdown 镜像 |
+| POST | `/seed` | 从 Markdown 模板批量导入 |
+
+## MCP 工具
+
+编辑器可直接调用：`memory_add`、`memory_recall`、`memory_list`、`memory_delete`。
+
+建议使用时机：会话开始时 `memory_recall` 当前任务；用户明确表达偏好时 `memory_add`。
+
+## 配置项
+
+全部通过环境变量，无需配置文件：
+
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `PMEM_DATA_DIR` | `~/.portable-memory` | 数据目录 |
+| `PMEM_HOST` / `PMEM_PORT` | `127.0.0.1` / `8765` | HTTP 监听 |
+| `PMEM_TOKEN` | 空 | Bearer token |
+| `PMEM_HALF_LIFE_DAYS` | `30` | 时间衰减半衰期 |
+| `PMEM_DEFAULT_LIMIT` / `PMEM_MAX_LIMIT` | `8` / `50` | 召回条数 |
+
+## 检索原理
+
+无向量库、无 LLM 调用：
+
+1. 中文按 bigram、英文按词切分；
+2. BM25 计算词法相关性；
+3. 叠加时间衰减（半衰期可配）、访问频次、重要性；
+4. 返回带分数明细的结果，可解释为什么召回。
+
+## 测试
+
+```bash
+PYTHONPATH=src python -m unittest discover -s tests -v
+```
+
+## 目录
+
+```
+src/portable_memory/
+  config.py     配置
+  db.py         SQLite 存储、去重、脱敏、导入导出
+  pipeline.py   捕获/处理/召回、BM25、衰减
+  server.py     REST 服务
+  mcp.py        MCP stdio 桥接
+  cli.py        命令行入口
+scripts/
+  setup_editors.py   编辑器 MCP 自动配置
+dsh-plugin/     DeepSeek Harness 适配层（骨架）
+tests/          单元测试
+```
+
+## License
 
 MIT
