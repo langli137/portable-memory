@@ -223,4 +223,4 @@ tests/          单元测试
 
 ## License
 
-MIT
+Apache-2.0（见 [LICENSE](LICENSE)）
