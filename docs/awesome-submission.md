@@ -1,7 +1,7 @@
 # 投稿清单：awesome-deepseek-harness 收录
 
 这个文件是把 portable-memory 提交到 awesome 列表的操作清单。
-带 `<...>` 的地方需要你自己填，其余已按仓库现状准备好。
+用户名已按你的 GitHub 账号 `langli137` 填好，其余按仓库现状准备好，可直接复制使用。
 
 目标仓库：`Dominic789654/awesome-deepseek-harness`（明确收录 MCP servers 类别）。
 该列表要求：仓库公开、带 dsh 相关 topic、README 说明与 DSH 的关系、中英文条目同步、纯新增行。
@@ -10,7 +10,7 @@
 
 ```bash
 # 在 F:/2025Code/portable-memory 下
-git remote add origin https://github.com/<你的用户名>/portable-memory.git
+git remote add origin https://github.com/langli137/portable-memory.git
 git push -u origin main
 ```
 
@@ -30,13 +30,13 @@ Fork 目标仓库后，在 `README.md`（英文）和 `README.zh-CN.md`（中文
 英文（README.md）：
 
 ```markdown
-- [<你的用户名>/portable-memory](https://github.com/<你的用户名>/portable-memory) — Local cross-project long-term memory MCP server with project isolation, sessions, and a Web UI; usable from DeepSeek Harness via MCP.
+- [langli137/portable-memory](https://github.com/langli137/portable-memory) — Local cross-project long-term memory MCP server with project isolation, sessions, and a Web UI; usable from DeepSeek Harness via MCP.
 ```
 
 中文（README.zh-CN.md，注意分隔符是 `——` 两个破折号）：
 
 ```markdown
-- [<你的用户名>/portable-memory](https://github.com/<你的用户名>/portable-memory) —— 本地跨项目长期记忆 MCP 服务，支持项目隔离、会话管理与 Web 面板，可通过 MCP 接入 DeepSeek Harness。
+- [langli137/portable-memory](https://github.com/langli137/portable-memory) —— 本地跨项目长期记忆 MCP 服务，支持项目隔离、会话管理与 Web 面板，可通过 MCP 接入 DeepSeek Harness。
 ```
 
 检查：`git diff` 里每一行都以 `+` 开头，没有任何被删改的现有行。
