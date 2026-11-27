@@ -98,6 +98,38 @@ python scripts/setup_editors.py --all --repo-root /path/to/project
 支持：Claude Code、Cursor、Windsurf、WorkBuddy、DeepSeek Harness、GitHub Copilot。
 脚本把 MCP 服务注册到各自的配置文件，指向 `python -m portable_memory mcp`。
 
+### 两种接入模式
+
+**全局模式**（默认）：每个编辑器写一份 home 目录配置，MCP 进程靠 cwd 向上找 `.pmem.json` 判断项目。
+
+```bash
+python scripts/setup_editors.py --all --dry-run
+python scripts/setup_editors.py --all
+```
+
+**项目模式**（推荐）：在项目根目录生成项目级配置，把 namespace **写死进环境变量**：
+
+```bash
+cd /path/to/my-project
+python -m portable_memory init my-project       # 1. 生成 .pmem.json
+python scripts/setup_editors.py --all --project .   # 2. namespace 自动从 .pmem.json 读
+# 或显式指定：--namespace my-project
+```
+
+生成的 `.mcp.json`（各编辑器路径不同）里 env 包含：
+
+```json
+"env": {
+  "PYTHONPATH": ".../src",
+  "PMEM_DATA_DIR": "~/.portable-memory",
+  "PMEM_NAMESPACE": "my-project"
+}
+```
+
+这样**无论编辑器从哪启动**（命令行、开始菜单、桌面图标），MCP 进程都明确知道自己属于哪个项目，不会把记忆写进 `default`。优先级：工具参数 > `PMEM_NAMESPACE` > cwd 的 `.pmem.json` > `default`。
+
+项目级配置文件路径：Claude Code `.mcp.json`、Cursor `.cursor/mcp.json`、Windsurf `.windsurf/mcp.json`、Copilot `.vscode/mcp.json`、WorkBuddy `.workbuddy/mcp.json`、DSH `.dsh/config.json`。
+
 ## DeepSeek Harness 集成
 
 portable-memory 是一个 **MCP server**，可被 DeepSeek Harness（dsh）直接调用，为其提供跨会话长期记忆：

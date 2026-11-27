@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -17,10 +18,13 @@ from .workspace import Workspace
 
 
 def _resolve_namespace(args, ws: Workspace) -> str:
-    """CLI default: use explicit --namespace, else detect .pmem.json."""
+    """Priority: explicit --namespace > PMEM_NAMESPACE env > .pmem.json."""
     ns = getattr(args, "namespace", None)
     if ns:
         return ns
+    env_ns = os.environ.get("PMEM_NAMESPACE")
+    if env_ns:
+        return env_ns
     detected = ws.detect_project(Path.cwd())
     return detected[0] if detected else "default"
 

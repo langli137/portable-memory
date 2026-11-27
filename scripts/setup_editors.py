@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
 """Register the portable-memory MCP server into AI editors.
 
-Idempotent: re-running rewrites only the managed entry. Each editor gets an
-MCP config pointing at `python -m portable_memory mcp`, which speaks MCP over
-stdio using the same memory store as the REST service.
+Two scopes:
+
+  * Global (default): one config per editor in the home directory. The MCP
+    process discovers the project by walking up from cwd to .pmem.json.
+  * Project (--project): writes an editor-specific config inside a project,
+    injecting PMEM_NAMESPACE so the MCP process knows its project regardless
+    of where the editor was launched from. This is the reliable mode.
+
+Idempotent: only the managed `portable-memory` entry is rewritten.
 
 Usage:
     python scripts/setup_editors.py --list
-    python scripts/setup_editors.py --all --repo-root /path/to/project
-    python scripts/setup_editors.py --editors claude,cursor --dry-run
+    python scripts/setup_editors.py --all --dry-run
+    python scripts/setup_editors.py --all --project /path/to/project
+    python scripts/setup_editors.py --editors claude --project . --namespace my-app
 """
 
 from __future__ import annotations
@@ -27,89 +34,143 @@ def _python_cmd() -> str:
     return os.environ.get("PMEM_PYTHON", sys.executable)
 
 
-def _mcp_entry() -> dict:
+def _mcp_entry(namespace: str | None = None) -> dict:
+    env = {
+        "PYTHONPATH": str(Path(__file__).resolve().parent.parent / "src"),
+        "PMEM_DATA_DIR": os.environ.get(
+            "PMEM_DATA_DIR", str(HOME / ".portable-memory")
+        ),
+    }
+    if namespace:
+        env["PMEM_NAMESPACE"] = namespace
     return {
         "command": _python_cmd(),
         "args": ["-m", "portable_memory", "mcp"],
-        "env": {
-            "PYTHONPATH": str(Path(__file__).resolve().parent.parent / "src"),
-            "PMEM_DATA_DIR": os.environ.get(
-                "PMEM_DATA_DIR", str(HOME / ".portable-memory")
-            ),
-        },
+        "env": env,
     }
 
 
-def _merge_mcp(existing: dict, dry_run: bool, path: Path) -> str:
+def _merge_mcp(existing: dict, dry_run: bool, path: Path, namespace: str | None) -> str:
     data = existing.get("mcpServers", {}) if isinstance(existing, dict) else {}
-    data["portable-memory"] = _mcp_entry()
+    data["portable-memory"] = _mcp_entry(namespace)
     merged = dict(existing) if isinstance(existing, dict) else {}
     merged["mcpServers"] = data
     text = json.dumps(merged, indent=2, ensure_ascii=False) + "\n"
     if not dry_run:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
-    return f"OK  {path}"
+    suffix = f" (namespace={namespace})" if namespace else ""
+    return f"OK  {path}{suffix}"
 
 
-def claude(repo_root: Path | None, dry: bool) -> str:
-    path = HOME / ".claude.json"
-    existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-    return _merge_mcp(existing, dry, path)
+def _write(existing: dict, dry: bool, path: Path, ns: str | None) -> str:
+    return _merge_mcp(existing, dry, path, ns)
 
 
-def cursor(repo_root: Path | None, dry: bool) -> str:
-    path = HOME / ".cursor" / "mcp.json"
-    existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-    return _merge_mcp(existing, dry, path)
+def _load(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except json.JSONDecodeError:
+        return {}
 
 
-def windsurf(repo_root: Path | None, dry: bool) -> str:
-    path = HOME / ".codeium" / "windsurf" / "mcp_config.json"
-    existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-    return _merge_mcp(existing, dry, path)
+# ---- Global scope: one config per editor in HOME ----
+
+def claude_global(root: Path, dry: bool, ns: str | None) -> str:
+    return _write(_load(HOME / ".claude.json"), dry, HOME / ".claude.json", ns)
 
 
-def workbuddy(repo_root: Path | None, dry: bool) -> str:
-    path = HOME / ".workbuddy" / "mcp.json"
-    existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-    if "mcpServers" not in existing:
-        existing["mcpServers"] = {}
-    return _merge_mcp(existing, dry, path)
+def cursor_global(root: Path, dry: bool, ns: str | None) -> str:
+    p = HOME / ".cursor" / "mcp.json"
+    return _write(_load(p), dry, p, ns)
 
 
-def dsh(repo_root: Path | None, dry: bool) -> str:
-    # DeepSeek Harness reads config from ~/.dsh/config.json (headless profile).
-    path = HOME / ".dsh" / "config.json"
-    existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-    return _merge_mcp(existing, dry, path)
+def windsurf_global(root: Path, dry: bool, ns: str | None) -> str:
+    p = HOME / ".codeium" / "windsurf" / "mcp_config.json"
+    return _write(_load(p), dry, p, ns)
 
 
-def copilot(repo_root: Path | None, dry: bool) -> str:
-    if repo_root is None:
-        return "SKIP  copilot requires --repo-root"
-    path = repo_root / ".vscode" / "mcp.json"
-    existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-    return _merge_mcp(existing, dry, path)
+def workbuddy_global(root: Path, dry: bool, ns: str | None) -> str:
+    p = HOME / ".workbuddy" / "mcp.json"
+    return _write(_load(p), dry, p, ns)
 
 
-EDITORS: dict[str, Callable[[Path | None, bool], str]] = {
-    "claude": claude,
-    "cursor": cursor,
-    "windsurf": windsurf,
-    "workbuddy": workbuddy,
-    "dsh": dsh,
-    "copilot": copilot,
+def dsh_global(root: Path, dry: bool, ns: str | None) -> str:
+    p = HOME / ".dsh" / "config.json"
+    return _write(_load(p), dry, p, ns)
+
+
+# ---- Project scope: config inside the repo, namespace pinned ----
+
+def claude_project(root: Path, dry: bool, ns: str | None) -> str:
+    p = root / ".mcp.json"
+    return _write(_load(p), dry, p, ns)
+
+
+def cursor_project(root: Path, dry: bool, ns: str | None) -> str:
+    p = root / ".cursor" / "mcp.json"
+    return _write(_load(p), dry, p, ns)
+
+
+def windsurf_project(root: Path, dry: bool, ns: str | None) -> str:
+    p = root / ".windsurf" / "mcp.json"
+    return _write(_load(p), dry, p, ns)
+
+
+def workbuddy_project(root: Path, dry: bool, ns: str | None) -> str:
+    p = root / ".workbuddy" / "mcp.json"
+    return _write(_load(p), dry, p, ns)
+
+
+def dsh_project(root: Path, dry: bool, ns: str | None) -> str:
+    p = root / ".dsh" / "config.json"
+    return _write(_load(p), dry, p, ns)
+
+
+def copilot_project(root: Path, dry: bool, ns: str | None) -> str:
+    p = root / ".vscode" / "mcp.json"
+    return _write(_load(p), dry, p, ns)
+
+
+GLOBAL: dict[str, Callable[[Path, bool, str | None], str]] = {
+    "claude": claude_global,
+    "cursor": cursor_global,
+    "windsurf": windsurf_global,
+    "workbuddy": workbuddy_global,
+    "dsh": dsh_global,
+}
+
+PROJECT: dict[str, Callable[[Path, bool, str | None], str]] = {
+    "claude": claude_project,
+    "cursor": cursor_project,
+    "windsurf": windsurf_project,
+    "workbuddy": workbuddy_project,
+    "dsh": dsh_project,
+    "copilot": copilot_project,
 }
 
 DESCRIPTIONS = {
-    "claude": "Claude Code (~/.claude.json)",
-    "cursor": "Cursor (~/.cursor/mcp.json)",
-    "windsurf": "Windsurf (~/.codeium/windsurf/mcp_config.json)",
-    "workbuddy": "WorkBuddy (~/.workbuddy/mcp.json)",
-    "dsh": "DeepSeek Harness (~/.dsh/config.json)",
-    "copilot": "GitHub Copilot (<repo>/.vscode/mcp.json)",
+    "claude": "Claude Code",
+    "cursor": "Cursor",
+    "windsurf": "Windsurf",
+    "workbuddy": "WorkBuddy",
+    "dsh": "DeepSeek Harness",
+    "copilot": "GitHub Copilot",
 }
+
+
+def _detect_namespace(root: Path) -> str | None:
+    marker = root / ".pmem.json"
+    if marker.is_file():
+        try:
+            data = json.loads(marker.read_text(encoding="utf-8"))
+            return data.get("namespace")
+        except (json.JSONDecodeError, OSError):
+            return None
+    return None
 
 
 def main() -> int:
@@ -118,24 +179,36 @@ def main() -> int:
     parser.add_argument("--editors", help="comma-separated editor keys")
     parser.add_argument("--list", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--repo-root", help="project path for project-scoped editors")
+    parser.add_argument("--project", metavar="PATH",
+                        help="write project-level configs into PATH (pins namespace)")
+    parser.add_argument("--namespace",
+                        help="namespace to pin (default: read from .pmem.json)")
     args = parser.parse_args()
 
     if args.list:
         for key, desc in DESCRIPTIONS.items():
             print(f"{key:<10} {desc}")
+        print("\nGlobal: one config per editor in HOME (cwd-based detection)")
+        print("Project: config in repo, PMEM_NAMESPACE pinned (recommended)")
         return 0
     if not args.all and not args.editors:
         parser.error("provide --all, --editors, or --list")
 
-    keys = list(EDITORS) if args.all else [k.strip() for k in args.editors.split(",")]
-    unknown = [k for k in keys if k not in EDITORS]
+    registry = PROJECT if args.project else GLOBAL
+    keys = list(registry) if args.all else [k.strip() for k in args.editors.split(",")]
+    unknown = [k for k in keys if k not in registry]
     if unknown:
-        parser.error(f"unknown editors: {', '.join(unknown)}")
+        parser.error(f"unknown editors for this scope: {', '.join(unknown)}")
 
-    repo = Path(args.repo_root).expanduser().resolve() if args.repo_root else None
+    root = Path(args.project).expanduser().resolve() if args.project else Path.cwd()
+    ns = args.namespace
+    if args.project and not ns:
+        ns = _detect_namespace(root)
+        if not ns:
+            parser.error("project mode needs --namespace or a .pmem.json with namespace")
+
     for key in keys:
-        print(f"{key:<10} {EDITORS[key](repo, args.dry_run)}")
+        print(f"{key:<10} {registry[key](root, args.dry_run, ns)}")
     return 0
 
 

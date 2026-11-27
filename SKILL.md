@@ -78,10 +78,24 @@ python -m portable_memory export
 
 ### Register into editors
 
+Global mode (cwd-based detection):
+
 ```bash
 python scripts/setup_editors.py --all --dry-run
 python scripts/setup_editors.py --all
 ```
+
+Project mode (recommended — pins namespace in `.mcp.json`):
+
+```bash
+cd <project>
+python -m portable_memory init <namespace>
+python scripts/setup_editors.py --all --project .
+```
+
+Project mode writes `PMEM_NAMESPACE` into each editor's project config, so
+memories land in the right project even if the editor is launched from a
+desktop icon instead of the project directory.
 
 Supported: Claude Code, Cursor, Windsurf, WorkBuddy, DeepSeek Harness, Copilot.
 

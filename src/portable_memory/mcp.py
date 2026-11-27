@@ -8,6 +8,7 @@ engine as native tools. Transport is line-delimited JSON for simplicity.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -104,9 +105,14 @@ class MCPBridge:
         self.workspace = Workspace(self.store.conn)
 
     def _namespace(self, args: dict) -> str:
+        # Priority: explicit tool arg > injected env (project-level .mcp.json)
+        # > .pmem.json discovered from cwd > default.
         ns = args.get("namespace")
         if ns:
             return str(ns)
+        env_ns = os.environ.get("PMEM_NAMESPACE")
+        if env_ns:
+            return env_ns
         detected = self.workspace.detect_project(Path.cwd())
         return detected[0] if detected else "default"
 
